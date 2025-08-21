@@ -60,25 +60,43 @@ local function collectEggs()
     return eggs
 end
 
-local function countEggs()
-    return #collectEggs()
-end
-
--- Hatch eggs
-local alreadyHatched = {}
-local function hatchEggsWindow(seconds)
-    seconds = seconds or 12
-    local tEnd = os.clock() + seconds
-    while os.clock() < tEnd and _G.autoFarm do
-        local eggs = collectEggs()
-        for _, egg in ipairs(eggs) do
-            if egg.Parent and not alreadyHatched[egg] then
-                PetEggService:FireServer("HatchPet", egg)
-                alreadyHatched[egg] = true
-                task.wait(0.1)
+local function getEggs()
+    local eggs = {}
+    local farm = workspace:FindFirstChild("Farm")
+    if farm and farm:FindFirstChild("Farm")
+        and farm.Farm:FindFirstChild("Important")
+        and farm.Farm.Important:FindFirstChild("Objects_Physical") then
+        for _, obj in pairs(farm.Farm.Important.Objects_Physical:GetChildren()) do
+            if obj.Name == "PetEgg" then
+                table.insert(eggs, obj)
             end
         end
-        task.wait(0.2)
+    end
+    return eggs
+end
+
+--------------------------------------------------
+-- Tools
+--------------------------------------------------
+local function waitCountdown(seconds)
+    for i = 1, seconds do
+        if not _G.autoFarm then
+            return false
+        end
+        task.wait(1)
+    end
+    return true
+end
+
+local function hatchEgg(duration)
+    local tEnd = os.clock() + duration
+    while os.clock() < tEnd and _G.autoFarm do
+        local eggs = getEggs()
+        for _, egg in ipairs(eggs) do
+            PetEggService:FireServer("HatchPet", egg)
+            task.wait(0.2)
+        end
+        task.wait(0.3)
     end
 end
 
@@ -106,30 +124,40 @@ local function isTargetEgg(eggName)
     return false
 end
 
-local function placeEggTen()
-    if not destination then return end
-    for i = 1, 10 do
-        for _, item in ipairs(backpack:GetChildren()) do
-            if isTargetEgg(item.Name) then
-                item.Parent = destination
+-- Multi Place Egg (satu-satu, delay aman 0.3s antar egg)
+local function multiPlaceEggs(duration)
+    local startTime = os.clock()
+    local endTime = startTime + duration
+
+    while os.clock() < endTime and _G.autoFarm do
+        for _, targetName in ipairs(targetEggNames) do
+            local backpack = Players.LocalPlayer.Backpack
+            local egg = backpack:FindFirstChild(targetName)
+
+            if egg and destination then
+                -- Step 1: Pindah ke destination
+                egg.Parent = destination
+                task.wait(0.3) -- biar kebaca "place"
+
+                -- Step 2: Balikin lagi ke backpack
+                local placedEgg = destination:FindFirstChild(targetName)
+                if placedEgg then
+                    placedEgg.Parent = backpack
+                end
+
+                -- Step 3: Delay sebelum lanjut egg berikutnya
+                task.wait(0.3)
             end
         end
-        local offsetX, offsetZ = math.random(-5,5), math.random(-5,5)
-        local pos = root.Position + Vector3.new(offsetX, 0, offsetZ)
-        PetEggService:FireServer("CreateEgg", pos)
-        task.wait(0.3)
+
+        -- Step 4: Delay antar cycle
+        task.wait(0.8)
     end
 end
 
-local function returnEggsToBackpack()
-    if not destination then return end
-    for _, obj in ipairs(destination:GetChildren()) do
-        if isTargetEgg(obj.Name) then
-            obj.Parent = backpack
-            task.wait(0.2)
-        end
-    end
-end
+
+
+
 
 --------------------------------------------------
 -- Sell Handling
@@ -169,49 +197,92 @@ local function sellPets()
             and isWhitelistedForSell(pet.Name) 
         then
             local weight = extractWeight(pet.Name)
+
+            -- transit ke destination
             pet.Parent = destination
-            task.wait(0.2)
+            task.wait(1)
+
             if weight <= weightLimit then
+                -- jual
                 SellEvent:FireServer(pet.Name)
+            else
+                -- overweight → langsung balikin
+                pet.Parent = backpack
+                task.wait(1)
             end
         end
     end
 end
 
---------------------------------------------------
--- Main Cycle
---------------------------------------------------
-local function mainCycle()
-    while _G.autoFarm do
-        if destination == nil or destinationName == "" or #targetEggNames == 0 then
-            warn("⚠ Harap isi Destination & Target Egg dulu di UI!")
-            return
+-- Failsafe → apapun yg masih nongkrong di destination, balikin ke backpack
+local function returnPetsAfterSellToBackpack()
+    if not destination then return end
+    for _, pet in ipairs(destination:GetChildren()) do
+        if pet:IsA("Model") then
+            pet.Parent = backpack
+            task.wait(0.2)
         end
-
-        PetsService:FireServer("SwapPetLoadout", 1)
-        for i=600,1,-1 do
-            if not _G.autoFarm then return end
-            task.wait(1)
-        end
-
-        PetsService:FireServer("SwapPetLoadout", 2)
-        task.wait(8)
-        hatchEggsWindow(12)
-        task.wait(15)
-        returnPetsToBackpack()
-        task.wait(2)
-        placeEggTen()
-        task.wait(8)
-        returnEggsToBackpack()
-        task.wait(1)
-
-        PetsService:FireServer("SwapPetLoadout", 3)
-        task.wait(8)
-        sellPets()
-        task.wait(5)
-        task.wait(25)
     end
 end
+
+
+--------------------------------------------------
+-- Main Cycle (1 siklus lalu stop, lanjut lagi 25 detik)
+--------------------------------------------------
+local function mainCycle()
+    if isRunning then return end
+    isRunning = true
+
+    repeat
+        -- Step 1: Loadout 1
+        PetsService:FireServer("SwapPetLoadout", 1)
+        if not waitCountdown(5) then break end
+
+        -- Step 2: Loadout 2
+        PetsService:FireServer("SwapPetLoadout", 2)
+        if not waitCountdown(8) then break end
+
+        -- Step 3: Hatch eggs
+        hatchEgg(12)
+        if not waitCountdown(15) then break end
+
+        -- Step 4: Balikin pet ke backpack
+        returnPetsToBackpack()
+        if not waitCountdown(2) then break end
+
+        -- Step 5: Multi place egg selama 8 detik
+        multiPlaceEggs(10)
+        if not waitCountdown(1) then break end
+
+        -- Step 6: Balikin sisa egg dari destination
+        
+
+        -- Step 7: Loadout 3
+        PetsService:FireServer("SwapPetLoadout", 3)
+        if not waitCountdown(8) then break end
+
+        -- Step 8: Jual pet
+        sellPets()
+        if not waitCountdown(5) then break end
+
+        -- Step 9: Failsafe balikin pet dari destination
+        returnPetsAfterSellToBackpack()
+        if not waitCountdown(2) then break end
+
+    until true
+
+    isRunning = false
+
+    -- kalau autoFarm masih aktif → jalan lagi 25 detik kemudian
+    if _G.autoFarm then
+        task.delay(25, function()
+            if _G.autoFarm then
+                mainCycle()
+            end
+        end)
+    end
+end
+
 
 --------------------------------------------------
 -- UI
@@ -284,13 +355,13 @@ tab:CreateInput({
 
 -- Toggle AutoFarm
 tab:CreateToggle({
-    Name = "Auto Farm (1 → 2 → Place Egg → 3 → Sell)",
+    Name = "Auto Farm Egg",
     CurrentValue = false,
     Flag = "AutoFarmToggle",
     Callback = function(Value)
         _G.autoFarm = Value
         if Value then
-            task.spawn(mainCycle)
+            mainCycle()
         end
     end,
 })
