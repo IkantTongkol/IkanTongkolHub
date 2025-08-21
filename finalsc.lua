@@ -159,9 +159,9 @@ end
 
 local function returnEggsToBackpack()
     if not destination then return end
-    for _, obj in ipairs(destination:GetChildren()) do
-        if isTargetEgg(obj.Name) then
-            obj.Parent = backpack
+    for _, telur in ipairs(destination:GetChildren()) do
+        if isTargetEgg(telur.Name) then
+            telur.Parent = backpack
             task.wait(0.2)
         end
     end
@@ -374,4 +374,5 @@ tab:CreateToggle({
         end
     end,
 })
+
 
